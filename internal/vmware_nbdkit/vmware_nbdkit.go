@@ -45,9 +45,25 @@ type NbdkitServer struct {
 }
 
 type migrationTarget struct {
-	Server *NbdkitServer
-	Target target.Target
-	Path   string
+	Server        *NbdkitServer
+	Target        target.Target
+	Path          string
+	NeedFullCopy  bool
+	TargetIsClean bool
+}
+
+func (mt *migrationTarget) connect(ctx context.Context) error {
+	var err error
+	// Capture freshness before Connect can create the destination volume.
+	mt.NeedFullCopy, mt.TargetIsClean, err = target.NeedsFullCopy(ctx, mt.Target)
+	if err != nil {
+		return err
+	}
+	if err := mt.Target.Connect(ctx); err != nil {
+		return err
+	}
+	mt.Path, err = mt.Target.GetPath(ctx)
+	return err
 }
 
 func NewNbdkitServers(vddk *VddkConfig, vm *object.VirtualMachine) *NbdkitServers {
@@ -226,17 +242,11 @@ func disconnectMigrationTargets(ctx context.Context, targets []*migrationTarget)
 	return errors.Join(errs...)
 }
 
-func (s *NbdkitServers) migrationCycleWithV2V(ctx context.Context) error {
+func (s *NbdkitServers) migrationCycleWithV2V(ctx context.Context) (err error) {
 	targets := []*migrationTarget{}
 	var targetsMu sync.Mutex
-	connected := true
 	defer func() {
-		if connected {
-			err := disconnectMigrationTargets(ctx, targets)
-			if err != nil {
-				log.WithError(err).Error("Failed to disconnect from targets")
-			}
-		}
+		err = errors.Join(err, disconnectMigrationTargets(ctx, targets))
 	}()
 
 	c := make(chan os.Signal, 1)
@@ -269,11 +279,6 @@ func (s *NbdkitServers) migrationCycleWithV2V(ctx context.Context) error {
 			return err
 		}
 
-		err = t.Connect(ctx)
-		if err != nil {
-			return err
-		}
-
 		mt := &migrationTarget{
 			Server: server,
 			Target: t,
@@ -282,35 +287,19 @@ func (s *NbdkitServers) migrationCycleWithV2V(ctx context.Context) error {
 		targets = append(targets, mt)
 		targetsMu.Unlock()
 
-		path, err := t.GetPath(ctx)
-		if err != nil {
+		if err := mt.connect(ctx); err != nil {
 			return err
 		}
-		mt.Path = path
 	}
 
 	for _, mt := range targets {
-		_, err := mt.Server.CopyToTarget(ctx, mt.Target, mt.Path)
+		_, err := mt.Server.CopyToTarget(ctx, mt.Target, mt.Path, mt.NeedFullCopy, mt.TargetIsClean)
 		if err != nil {
 			return err
 		}
 	}
 
-	// Even failed conversion can modify a disk. Invalidate every checkpoint
-	// before handing the volumes to virt-v2v.
-	for _, mt := range targets {
-		err := mt.Target.WriteChangeID(ctx, &vmware.ChangeID{})
-		if err != nil {
-			return err
-		}
-	}
-
-	if err := s.RunVirtV2VInPlace(ctx, targets); err != nil {
-		return err
-	}
-	err := disconnectMigrationTargets(ctx, targets)
-	connected = false
-	return err
+	return s.RunVirtV2VInPlace(ctx, targets)
 }
 
 func (s *NbdkitServer) FullCopyToTarget(t target.Target, path string, targetIsClean bool) error {
@@ -418,13 +407,8 @@ func (s *NbdkitServer) IncrementalCopyToTarget(ctx context.Context, t target.Tar
 	return nil
 }
 
-func (s *NbdkitServer) CopyToTarget(ctx context.Context, t target.Target, path string) (*vmware.ChangeID, error) {
+func (s *NbdkitServer) CopyToTarget(ctx context.Context, t target.Target, path string, needFullCopy, targetIsClean bool) (*vmware.ChangeID, error) {
 	snapshotChangeId, err := vmware.GetChangeID(s.Disk)
-	if err != nil {
-		return nil, err
-	}
-
-	needFullCopy, targetIsClean, err := target.NeedsFullCopy(ctx, t)
 	if err != nil {
 		return nil, err
 	}
@@ -445,7 +429,8 @@ func (s *NbdkitServer) CopyToTarget(ctx context.Context, t target.Target, path s
 }
 
 func (s *NbdkitServer) SyncToTarget(ctx context.Context, t target.Target) error {
-	err := t.Connect(ctx)
+	mt := &migrationTarget{Server: s, Target: t}
+	err := mt.connect(ctx)
 	if err != nil {
 		return err
 	}
@@ -465,12 +450,7 @@ func (s *NbdkitServer) SyncToTarget(ctx context.Context, t target.Target) error 
 		os.Exit(1)
 	}()
 
-	path, err := t.GetPath(ctx)
-	if err != nil {
-		return err
-	}
-
-	snapshotChangeId, err := s.CopyToTarget(ctx, t, path)
+	snapshotChangeId, err := s.CopyToTarget(ctx, t, mt.Path, mt.NeedFullCopy, mt.TargetIsClean)
 	if err != nil {
 		return err
 	}

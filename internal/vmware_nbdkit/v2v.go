@@ -8,6 +8,7 @@ import (
 	"os/exec"
 
 	log "github.com/sirupsen/logrus"
+	"github.com/vexxhost/migratekit/internal/target"
 	"github.com/vmware/govmomi/vim25/mo"
 	"github.com/vmware/govmomi/vim25/types"
 )
@@ -181,9 +182,9 @@ func (s *NbdkitServers) RunVirtV2VInPlace(ctx context.Context, targets []*migrat
 	}
 
 	cmd := exec.Command("virt-v2v-in-place", args...)
-	cmd.Env = append(os.Environ(), "LIBGUESTFS_BACKEND=direct")
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-
-	return cmd.Run()
+	inputs := make([]target.Target, 0, len(targets))
+	for _, mt := range targets {
+		inputs = append(inputs, mt.Target)
+	}
+	return runConversion(ctx, inputs, cmd)
 }
