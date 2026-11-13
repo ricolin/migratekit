@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 
@@ -36,13 +37,12 @@ func TestConversionInvalidatesCheckpointOnFailure(t *testing.T) {
 			t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
 			t.Setenv("LIBGUESTFS_BACKEND", "parent-backend")
 			disk := filepath.Join(dir, "disk")
-			target := &conversionTarget{changeID: "snapshot/1"}
-			server := &NbdkitServer{Servers: &NbdkitServers{VddkConfig: &VddkConfig{}}}
-			err := server.convertTarget(context.Background(), target, disk)
+			destination := &conversionTarget{changeID: "snapshot/1"}
+			err := runConversion(context.Background(), []target.Target{destination}, exec.Command("virt-v2v-in-place", "-i", "disk", disk))
 			if (err == nil) != (exitCode == "0") {
 				t.Fatalf("unexpected conversion error: %v", err)
 			}
-			if target.changeID != "" {
+			if destination.changeID != "" {
 				t.Fatal("conversion left a stale checkpoint")
 			}
 			data, readErr := os.ReadFile(disk)
@@ -56,18 +56,29 @@ func TestConversionInvalidatesCheckpointOnFailure(t *testing.T) {
 	}
 }
 
+func TestConversionInvalidatesEveryInputCheckpoint(t *testing.T) {
+	first := &conversionTarget{changeID: "snapshot/1"}
+	last := &conversionTarget{changeID: "snapshot/2"}
+	if err := runConversion(context.Background(), []target.Target{first, last}, exec.Command("true")); err != nil {
+		t.Fatal(err)
+	}
+	if first.changeID != "" || last.changeID != "" {
+		t.Fatal("conversion retained an input checkpoint")
+	}
+}
+
 func TestConversionStopsIfCheckpointCannotBeInvalidated(t *testing.T) {
 	disk := filepath.Join(t.TempDir(), "disk")
 	want := errors.New("metadata update failed")
-	target := &conversionTarget{changeID: "snapshot/1", writeErr: want}
-	server := &NbdkitServer{Servers: &NbdkitServers{VddkConfig: &VddkConfig{}}}
-	if err := server.convertTarget(context.Background(), target, disk); !errors.Is(err, want) {
+	first := &conversionTarget{changeID: "snapshot/1"}
+	last := &conversionTarget{changeID: "snapshot/2", writeErr: want}
+	if err := runConversion(context.Background(), []target.Target{first, last}, exec.Command("touch", disk)); !errors.Is(err, want) {
 		t.Fatalf("got %v, want %v", err, want)
 	}
 	if _, err := os.Stat(disk); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("conversion ran after checkpoint update failed")
 	}
-	if target.changeID != "snapshot/1" {
+	if first.changeID != "" || last.changeID != "snapshot/2" {
 		t.Fatal("failed metadata update changed checkpoint")
 	}
 }
