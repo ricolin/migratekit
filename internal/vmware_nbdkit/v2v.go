@@ -5,7 +5,6 @@ import (
 	"encoding/xml"
 	"fmt"
 	"os"
-	"os/exec"
 
 	log "github.com/sirupsen/logrus"
 	"github.com/vexxhost/migratekit/internal/target"
@@ -176,12 +175,7 @@ func (s *NbdkitServers) RunVirtV2VInPlace(ctx context.Context, targets []*migrat
 		return err
 	}
 
-	args := []string{"-i", "libvirtxml", xmlFile.Name()}
-	if s.VddkConfig.Debug {
-		args = append([]string{"-v", "-x"}, args...)
-	}
-
-	cmd := exec.Command("virt-v2v-in-place", args...)
+	cmd := conversionCommand(ctx, s.VddkConfig.Debug, "-i", "libvirtxml", xmlFile.Name())
 	inputs := make([]target.Target, 0, len(targets))
 	for _, mt := range targets {
 		inputs = append(inputs, mt.Target)

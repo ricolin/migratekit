@@ -79,11 +79,6 @@ func (t *OpenStack) Connect(ctx context.Context) error {
 
 	opts := ctx.Value("volumeCreateOpts").(*VolumeCreateOpts)
 
-	if opts.BusType == "scsi" {
-		volumeMetadata["hw_disk_bus"] = "scsi"
-		volumeMetadata["hw_scsi_model"] = "virtio-scsi"
-	}
-
 	if errors.Is(err, openstack.ErrorVolumeNotFound) {
 		log.Info("Creating new volume")
 		volume, err = t.createVolume(ctx, opts, volumeMetadata)
@@ -119,6 +114,10 @@ func (t *OpenStack) Connect(ctx context.Context) error {
 			}).Info("VMware GustId")
 
 			volumeImageMetadata := map[string]string{}
+			if opts.BusType == "scsi" {
+				volumeImageMetadata["hw_disk_bus"] = "scsi"
+				volumeImageMetadata["hw_scsi_model"] = "virtio-scsi"
+			}
 			switch osTypeCMD := ctx.Value("osType").(string); osTypeCMD {
 			case "auto":
 				guestIdLower := strings.ToLower(o.Config.GuestId)
