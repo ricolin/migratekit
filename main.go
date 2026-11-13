@@ -72,7 +72,8 @@ var (
 	busType              BusTypeOpts
 	vzUnsafeVolumeByName bool
 	osType               string
-    enableQemuGuestAgent bool
+	enableQemuGuestAgent bool
+	guestNetworkConfigs  []string
 )
 
 var rootCmd = &cobra.Command{
@@ -198,6 +199,7 @@ var rootCmd = &cobra.Command{
 		ctx = context.WithValue(ctx, "osType", osType)
 
 		ctx = context.WithValue(ctx, "enableQemuGuestAgent", enableQemuGuestAgent)
+		ctx = context.WithValue(ctx, "guestNetworkConfigs", guestNetworkConfigs)
 
 		cmd.SetContext(ctx)
 
@@ -327,6 +329,7 @@ var cutoverCmd = &cobra.Command{
 
 func init() {
 	rootCmd.PersistentFlags().BoolVar(&debug, "debug", false, "Enable debug logging")
+	rootCmd.PersistentFlags().StringArrayVar(&guestNetworkConfigs, "guest-network-config", nil, "Windows guest static IP configuration forwarded to virt-v2v --mac (MAC:ip:ADDRESS,GATEWAY,PREFIX[,DNS...]); repeat for multiple NICs")
 
 	rootCmd.PersistentFlags().StringVar(&endpoint, "vmware-endpoint", "", "VMware endpoint (hostname or IP only)")
 	rootCmd.MarkPersistentFlagRequired("vmware-endpoint")
@@ -350,9 +353,9 @@ func init() {
 
 	rootCmd.PersistentFlags().BoolVar(&vzUnsafeVolumeByName, "vz-unsafe-volume-by-name", false, "Only use the name to find a volume - workaround for virtuozzu - dangerous option")
 
-    rootCmd.PersistentFlags().StringVar(&osType, "os-type", "", "Set os_type in the volume (image) metadata, (if set to \"auto\", it tries to detect the type from VMware GuestId)")
+	rootCmd.PersistentFlags().StringVar(&osType, "os-type", "", "Set os_type in the volume (image) metadata, (if set to \"auto\", it tries to detect the type from VMware GuestId)")
 
-    rootCmd.PersistentFlags().BoolVar(&enableQemuGuestAgent, "enable-qemu-guest-agent", false, "Sets the hw_qemu_guest_agent metadata parameter to yes")
+	rootCmd.PersistentFlags().BoolVar(&enableQemuGuestAgent, "enable-qemu-guest-agent", false, "Sets the hw_qemu_guest_agent metadata parameter to yes")
 
 	cutoverCmd.Flags().StringVar(&flavorId, "flavor", "", "OpenStack Flavor ID")
 	cutoverCmd.MarkFlagRequired("flavor")
