@@ -3,8 +3,12 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net"
 	"net/url"
 	"os"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/erikgeiser/promptkit/confirmation"
@@ -72,13 +76,18 @@ var (
 	busType              BusTypeOpts
 	vzUnsafeVolumeByName bool
 	osType               string
-    enableQemuGuestAgent bool
+	enableQemuGuestAgent bool
+	guestNetworkConfigs  []string
 )
 
 var rootCmd = &cobra.Command{
 	Use:   "migratekit",
 	Short: "Near-live migration toolkit for VMware to OpenStack",
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+		// Validate before authentication, replication or shutting down the source.
+		if err := validateGuestNetworkOptions(guestNetworkConfigs, enablev2v); err != nil {
+			return err
+		}
 		if debug {
 			log.SetLevel(log.DebugLevel)
 		}
@@ -198,6 +207,7 @@ var rootCmd = &cobra.Command{
 		ctx = context.WithValue(ctx, "osType", osType)
 
 		ctx = context.WithValue(ctx, "enableQemuGuestAgent", enableQemuGuestAgent)
+		ctx = context.WithValue(ctx, "guestNetworkConfigs", guestNetworkConfigs)
 
 		cmd.SetContext(ctx)
 
@@ -327,6 +337,7 @@ var cutoverCmd = &cobra.Command{
 
 func init() {
 	rootCmd.PersistentFlags().BoolVar(&debug, "debug", false, "Enable debug logging")
+	rootCmd.PersistentFlags().StringArrayVar(&guestNetworkConfigs, "guest-network-config", nil, "Windows guest static IP configuration forwarded to virt-v2v --mac (MAC:ip:ADDRESS,GATEWAY,PREFIX[,DNS...]); repeat for multiple NICs")
 
 	rootCmd.PersistentFlags().StringVar(&endpoint, "vmware-endpoint", "", "VMware endpoint (hostname or IP only)")
 	rootCmd.MarkPersistentFlagRequired("vmware-endpoint")
@@ -350,9 +361,9 @@ func init() {
 
 	rootCmd.PersistentFlags().BoolVar(&vzUnsafeVolumeByName, "vz-unsafe-volume-by-name", false, "Only use the name to find a volume - workaround for virtuozzu - dangerous option")
 
-    rootCmd.PersistentFlags().StringVar(&osType, "os-type", "", "Set os_type in the volume (image) metadata, (if set to \"auto\", it tries to detect the type from VMware GuestId)")
+	rootCmd.PersistentFlags().StringVar(&osType, "os-type", "", "Set os_type in the volume (image) metadata, (if set to \"auto\", it tries to detect the type from VMware GuestId)")
 
-    rootCmd.PersistentFlags().BoolVar(&enableQemuGuestAgent, "enable-qemu-guest-agent", false, "Sets the hw_qemu_guest_agent metadata parameter to yes")
+	rootCmd.PersistentFlags().BoolVar(&enableQemuGuestAgent, "enable-qemu-guest-agent", false, "Sets the hw_qemu_guest_agent metadata parameter to yes")
 
 	cutoverCmd.Flags().StringVar(&flavorId, "flavor", "", "OpenStack Flavor ID")
 	cutoverCmd.MarkFlagRequired("flavor")
@@ -375,4 +386,46 @@ func main() {
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
 	}
+}
+
+func validateGuestNetworkOptions(configs []string, runV2V bool) error {
+	if len(configs) > 0 && !runV2V {
+		return fmt.Errorf("--guest-network-config requires --run-v2v=true")
+	}
+	for _, config := range configs {
+		mac, addresses, found := strings.Cut(config, ":ip:")
+		hardware, err := net.ParseMAC(mac)
+		if !found || err != nil || len(hardware) != 6 {
+			return fmt.Errorf("invalid --guest-network-config: expected MAC:ip:ADDRESS,GATEWAY,PREFIX[,DNS...]")
+		}
+		fields := strings.Split(addresses, ",")
+		ip := net.ParseIP(fields[0])
+		if ip == nil {
+			return fmt.Errorf("invalid --guest-network-config IP address")
+		}
+		if len(fields) > 1 && fields[1] != "" {
+			gateway := net.ParseIP(fields[1])
+			if gateway == nil || (gateway.To4() == nil) != (ip.To4() == nil) {
+				return fmt.Errorf("invalid --guest-network-config gateway")
+			}
+		}
+		if len(fields) > 2 && fields[2] != "" {
+			prefix, err := strconv.Atoi(fields[2])
+			max := 128
+			if ip.To4() != nil {
+				max = 32
+			}
+			if err != nil || prefix < 0 || prefix > max {
+				return fmt.Errorf("invalid --guest-network-config prefix length")
+			}
+		}
+		if len(fields) > 3 {
+			for _, dns := range fields[3:] {
+				if net.ParseIP(dns) == nil {
+					return fmt.Errorf("invalid --guest-network-config DNS address")
+				}
+			}
+		}
+	}
+	return nil
 }
