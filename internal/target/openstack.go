@@ -121,9 +121,8 @@ func (t *OpenStack) Connect(ctx context.Context) error {
 			volumeImageMetadata := map[string]string{}
 			switch osTypeCMD := ctx.Value("osType").(string); osTypeCMD {
 			case "auto":
-				guestIdLower := strings.ToLower(o.Config.GuestId)
 				vmOsType := "linux" // linux is the default os type, TODO: Add mapping for all possible GuestIds
-				if strings.Contains(guestIdLower, "windows") {
+				if vmware.IsWindowsGuest(o.Config.GuestId) {
 					vmOsType = "windows"
 				}
 				volumeImageMetadata["os_type"] = vmOsType
