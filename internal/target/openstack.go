@@ -114,10 +114,6 @@ func (t *OpenStack) Connect(ctx context.Context) error {
 			}).Info("VMware GustId")
 
 			volumeImageMetadata := map[string]string{}
-			if opts.BusType == "scsi" {
-				volumeImageMetadata["hw_disk_bus"] = "scsi"
-				volumeImageMetadata["hw_scsi_model"] = "virtio-scsi"
-			}
 			switch osTypeCMD := ctx.Value("osType").(string); osTypeCMD {
 			case "auto":
 				guestIdLower := strings.ToLower(o.Config.GuestId)
@@ -172,6 +168,12 @@ func (t *OpenStack) Connect(ctx context.Context) error {
 			}
 		}
 	} else if err != nil {
+		return err
+	}
+
+	// Replication may have created this volume with a different bus, or with
+	// an older Migratekit that put these properties in ordinary metadata.
+	if err := t.ensureVolumeBusMetadata(ctx, volume, opts); err != nil {
 		return err
 	}
 
@@ -231,6 +233,22 @@ func (t *OpenStack) Connect(ctx context.Context) error {
 		}
 	}
 
+	return nil
+}
+
+func (t *OpenStack) ensureVolumeBusMetadata(ctx context.Context, volume *volumes.Volume, opts *VolumeCreateOpts) error {
+	metadata := map[string]string{"hw_disk_bus": "virtio"}
+	if opts.BusType == "scsi" {
+		metadata["hw_disk_bus"] = "scsi"
+		metadata["hw_scsi_model"] = "virtio-scsi"
+	}
+	for key, value := range metadata {
+		if volume.VolumeImageMetadata[key] != value {
+			return volumes.SetImageMetadata(ctx, t.ClientSet.BlockStorage, volume.ID, volumes.ImageMetadataOpts{
+				Metadata: metadata,
+			}).ExtractErr()
+		}
+	}
 	return nil
 }
 
